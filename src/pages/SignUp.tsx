@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useContent } from "../lib/contentLoader";
+import { SignUp as ClerkSignUp, useUser } from "@clerk/clerk-react";
 import { Button } from "../components/ui/button";
 import {
   Card,
@@ -105,6 +106,7 @@ const SignUp: React.FC = () => {
   const { content } = useContent();
   const location = useLocation();
   const navigate = useNavigate();
+  const { user, isSignedIn } = useUser();
 
   // Get user data from location state (passed from CheckAvailability)
   const initialUserData = location.state?.userData || {
@@ -528,15 +530,24 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
     }
   };
 
+  // Effect to automatically proceed when user is signed in
+  useEffect(() => {
+    if (isSignedIn && user && currentStep === 1) {
+      // Update signUpData with user email
+      setSignUpData(prev => ({
+        ...prev,
+        email: user.primaryEmailAddress?.emailAddress || "",
+        accountCreated: true
+      }));
+      // Automatically proceed to next step
+      handleNext();
+    }
+  }, [isSignedIn, user, currentStep]);
+
   const canProceedFromStep = (step: number): boolean => {
     switch (step) {
       case 1:
-        return (
-          validateEmail(signUpData.email) &&
-          validatePassword(signUpData.password) &&
-          !emailError &&
-          !passwordError
-        );
+        return isSignedIn && user !== null;
       case 2:
         return signUpData.installType !== "";
       case 3:
@@ -566,8 +577,7 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
             <div className="text-center">
               <h2 className="text-3xl font-bold mb-2">Set Up Your Account</h2>
               <p className="text-muted-foreground">
-                Enter your email and create a password to begin your sign-up for{" "}
-                {companyName}.
+                Create your account to begin your sign-up for {companyName}.
               </p>
             </div>
 
@@ -578,69 +588,23 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
                   <span>Create Login</span>
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email Address</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={signUpData.email}
-                    onChange={(e) => handleEmailChange(e.target.value)}
-                    placeholder="Enter your email address"
-                    className={emailError ? "border-red-500" : ""}
-                  />
-                  {emailError && (
-                    <p className="text-sm text-red-500">{emailError}</p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      type={showPassword ? "text" : "password"}
-                      value={signUpData.password}
-                      onChange={(e) => handlePasswordChange(e.target.value)}
-                      placeholder="Create a password (min. 8 characters)"
-                      className={
-                        passwordError ? "border-red-500 pr-10" : "pr-10"
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4" />
-                      ) : (
-                        <Eye className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
-                  {passwordError && (
-                    <p className="text-sm text-red-500">{passwordError}</p>
-                  )}
-                  <p className="text-xs text-muted-foreground">
-                    Password must be at least 8 characters long
-                  </p>
-                </div>
-
-                <div className="pt-4">
-                  <Button
-                    onClick={handleCreateAccount}
-                    disabled={!canProceedFromStep(1) || isCreatingAccount}
-                    className="w-full"
-                    size="lg"
-                  >
-                    {isCreatingAccount
-                      ? "Creating Account..."
-                      : "Create Account & Continue"}
-                  </Button>
-                </div>
+              <CardContent>
+                <ClerkSignUp
+                  appearance={{
+                    elements: {
+                      formButtonPrimary: "bg-orange-600 hover:bg-orange-700 text-white",
+                      card: "shadow-none",
+                      headerTitle: "hidden",
+                      headerSubtitle: "hidden",
+                      socialButtonsBlockButton: "bg-white border border-gray-300 hover:bg-gray-50",
+                      formFieldInput: "border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-orange-500 focus:border-orange-500",
+                      formFieldLabel: "text-sm font-medium text-gray-700",
+                      footerActionLink: "text-orange-600 hover:text-orange-700",
+                    }
+                  }}
+                  redirectUrl="/signup-flow"
+                  afterSignUpUrl="/signup-flow"
+                />
               </CardContent>
             </Card>
           </div>
@@ -667,11 +631,10 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
             >
               <div className="space-y-4">
                 <Card
-                  className={`cursor-pointer transition-all hover:shadow-lg h-full ${
-                    signUpData.installType === "contract"
-                      ? "ring-2 ring-brand-primary"
-                      : ""
-                  }`}
+                  className={`cursor-pointer transition-all hover:shadow-lg h-full ${signUpData.installType === "contract"
+                    ? "ring-2 ring-brand-primary"
+                    : ""
+                    }`}
                 >
                   <CardHeader className="text-center">
                     <div className="flex items-center space-x-2 justify-center">
@@ -702,11 +665,10 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
 
               <div className="space-y-4">
                 <Card
-                  className={`cursor-pointer transition-all hover:shadow-lg h-full ${
-                    signUpData.installType === "no-contract"
-                      ? "ring-2 ring-brand-primary"
-                      : ""
-                  }`}
+                  className={`cursor-pointer transition-all hover:shadow-lg h-full ${signUpData.installType === "no-contract"
+                    ? "ring-2 ring-brand-primary"
+                    : ""
+                    }`}
                 >
                   <CardHeader className="text-center">
                     <div className="flex items-center space-x-2 justify-center">
@@ -1040,7 +1002,7 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
                           <Checkbox
                             id="property-email-copy"
                             checked={propertyEmailCopy}
-                            onCheckedChange={setPropertyEmailCopy}
+                            onCheckedChange={(checked) => setPropertyEmailCopy(checked as boolean)}
                           />
                           <Label
                             htmlFor="property-email-copy"
@@ -1377,7 +1339,7 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
                           <Checkbox
                             id="email-copy"
                             checked={emailCopy}
-                            onCheckedChange={setEmailCopy}
+                            onCheckedChange={(checked) => setEmailCopy(checked as boolean)}
                           />
                           <Label htmlFor="email-copy" className="text-sm">
                             Email me a copy of the signed agreement
@@ -1890,6 +1852,8 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
     }
   };
 
+  console.log(currentStep);
+
   return (
     <div className="min-h-screen bg-background">
       {/* Progress Header */}
@@ -1936,13 +1900,12 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
                   </div>
                   <div className="text-center">
                     <div
-                      className={`text-xs font-medium ${
-                        isActive
-                          ? "text-brand-primary"
-                          : isCompleted
-                            ? "text-green-600"
-                            : "text-gray-400"
-                      }`}
+                      className={`text-xs font-medium ${isActive
+                        ? "text-brand-primary"
+                        : isCompleted
+                          ? "text-green-600"
+                          : "text-gray-400"
+                        }`}
                     >
                       {step.title}
                     </div>
@@ -1975,18 +1938,9 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
             )}
 
             {currentStep === 1 ? (
-              <Button
-                onClick={handleCreateAccount}
-                disabled={!canProceedFromStep(currentStep) || isCreatingAccount}
-                className="flex items-center space-x-2"
-              >
-                <span>
-                  {isCreatingAccount
-                    ? "Creating Account..."
-                    : "Create Account & Continue"}
-                </span>
-                <ArrowRight className="h-4 w-4" />
-              </Button>
+              <div className="text-center text-sm text-muted-foreground">
+                {isSignedIn ? "Account created successfully! Proceeding..." : "Please complete the sign-up form above"}
+              </div>
             ) : (
               <Button
                 onClick={handleNext}

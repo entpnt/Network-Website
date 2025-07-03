@@ -1,6 +1,7 @@
 import React, { useState, useEffect, createContext, useContext } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useContent } from "../lib/contentLoader";
+import { useUser, useClerk } from "@clerk/clerk-react";
 import { Button } from "./ui/button";
 import {
   NavigationMenu,
@@ -57,7 +58,7 @@ const UserStateContext = createContext<{
   setUserState: (state: UserState) => void;
 }>({
   userState: "visitor",
-  setUserState: () => {},
+  setUserState: () => { },
 });
 
 export const useUserState = () => useContext(UserStateContext);
@@ -67,6 +68,10 @@ const Layout = ({ children }: LayoutProps) => {
   const { content } = useContent();
   const navigate = useNavigate();
   const [darkMode, setDarkMode] = useState(false);
+
+  // Clerk authentication
+  const { user, isSignedIn } = useUser();
+  const { signOut } = useClerk();
 
   // User state toggle for testing different UI versions
   const [userState, setUserState] = useState<UserState>(() => {
@@ -153,22 +158,44 @@ const Layout = ({ children }: LayoutProps) => {
   ];
 
   const handleLogin = () => {
-    setUserState("registered-no-device");
+    navigate("/signup-flow");
   };
 
-  const handleLogout = () => {
-    setUserState("visitor");
-    // Clear signup data on logout
-    localStorage.removeItem("userSignupData");
-    navigate("/");
+  const handleLogout = async () => {
+    try {
+      await signOut();
+      setUserState("visitor");
+      // Clear signup data on logout
+      localStorage.removeItem("userSignupData");
+      navigate("/");
+    } catch (error) {
+      console.error("Error signing out:", error);
+    }
   };
 
   const handleSignUp = () => {
     navigate("/check-availability");
   };
 
-  // Mock user data - in real app this would come from authentication context
+  // Get user data from Clerk or fallback to stored data
   const getUserData = () => {
+    if (isSignedIn && user) {
+      const firstName = user.firstName || "";
+      const lastName = user.lastName || "";
+      const fullName = `${firstName} ${lastName}`.trim() || user.primaryEmailAddress?.emailAddress || "User";
+      const email = user.primaryEmailAddress?.emailAddress || "";
+      const initials = firstName && lastName
+        ? `${firstName[0]}${lastName[0]}`.toUpperCase()
+        : fullName.substring(0, 2).toUpperCase();
+
+      return {
+        name: fullName,
+        email: email,
+        initials: initials,
+      };
+    }
+
+    // Fallback to stored signup data
     const signupData = localStorage.getItem("userSignupData");
     if (signupData) {
       try {
@@ -187,17 +214,18 @@ const Layout = ({ children }: LayoutProps) => {
         console.error("Error parsing signup data:", error);
       }
     }
+
     return {
-      name: "John Doe",
-      email: "john.doe@email.com",
-      initials: "JD",
+      name: "Guest User",
+      email: "guest@example.com",
+      initials: "GU",
     };
   };
 
   const userData = getUserData();
 
-  // Determine UI state based on user state
-  const isLoggedIn = userState !== "visitor";
+  // Determine UI state based on Clerk authentication
+  const isLoggedIn = isSignedIn;
   const hasDeviceConnected = userState === "registered-with-device";
   const showMarketplace = hasDeviceConnected;
 
@@ -309,8 +337,8 @@ const Layout = ({ children }: LayoutProps) => {
             {/* Action Buttons */}
             <div className="hidden md:flex md:items-center md:space-x-3">
               <DarkModeToggle />
-              {userState === "visitor" ? (
-                /* First-Time Visitor State */
+              {!isSignedIn ? (
+                /* Not Signed In State */
                 <>
                   <Button
                     variant="outline"
@@ -327,78 +355,21 @@ const Layout = ({ children }: LayoutProps) => {
                   </Button>
                 </>
               ) : (
-                /* Registered User States */
+                /* Signed In State */
                 <>
-                  {/* Marketplace Button - Show next to avatar when device is connected */}
-                  {hasDeviceConnected && (
+                  {/* User Name Display */}
+                  <div className="flex items-center space-x-3">
+                    <span className="text-sm font-medium text-foreground">
+                      {userData.name}
+                    </span>
                     <Button
                       variant="outline"
-                      onClick={() => navigate("/marketplace")}
-                      className="flex items-center space-x-2 px-3 py-2 h-9"
+                      onClick={handleLogout}
+                      className="text-sm"
                     >
-                      <ShoppingCart className="h-4 w-4" />
-                      <span>Marketplace</span>
+                      Sign Out
                     </Button>
-                  )}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        className="relative h-10 w-10 rounded-full p-0"
-                      >
-                        <Avatar className="h-10 w-10">
-                          <AvatarImage src="" alt={userData.name} />
-                          <AvatarFallback className="bg-brand-primary text-white font-medium">
-                            {userData.initials}
-                          </AvatarFallback>
-                        </Avatar>
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      className="w-56"
-                      align="end"
-                      forceMount
-                    >
-                      <div className="flex items-center justify-start gap-2 p-2">
-                        <div className="flex flex-col space-y-1 leading-none">
-                          <p className="font-medium">{userData.name}</p>
-                          <p className="w-[200px] truncate text-sm text-muted-foreground">
-                            {userData.email}
-                          </p>
-                        </div>
-                      </div>
-                      <DropdownMenuItem asChild>
-                        <Link to="/my-account" className="flex items-center">
-                          <User className="mr-2 h-4 w-4" />
-                          <span>Dashboard</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      {hasDeviceConnected && (
-                        <DropdownMenuItem asChild>
-                          <Link to="/my-services" className="flex items-center">
-                            <ShoppingCart className="mr-2 h-4 w-4" />
-                            <span>MyServices</span>
-                          </Link>
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuItem asChild>
-                        <Link to="/settings" className="flex items-center">
-                          <Settings className="mr-2 h-4 w-4" />
-                          <span>Settings</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem asChild>
-                        <Link to="/billing" className="flex items-center">
-                          <CreditCard className="mr-2 h-4 w-4" />
-                          <span>Billing</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleLogout}>
-                        <LogOut className="mr-2 h-4 w-4" />
-                        <span>Logout</span>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  </div>
                 </>
               )}
             </div>
@@ -407,30 +378,29 @@ const Layout = ({ children }: LayoutProps) => {
 
         {/* Main Content */}
         <main className="flex-1">
-          {/* No Device Prompt for Registered Users without Device */}
-          {userState === "registered-no-device" && (
+          {/* Welcome Message for Signed In Users */}
+          {isSignedIn && (
             <div className="bg-blue-50 dark:bg-blue-900/20 border-b border-blue-200 dark:border-blue-800">
               <div className="container py-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-3">
                     <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-800 flex items-center justify-center">
-                      <ShoppingCart className="h-5 w-5 text-blue-600 dark:text-blue-300" />
+                      <User className="h-5 w-5 text-blue-600 dark:text-blue-300" />
                     </div>
                     <div>
                       <h3 className="font-semibold text-blue-900 dark:text-blue-100">
-                        Welcome to {companyName}!
+                        Welcome back, {userData.name}!
                       </h3>
                       <p className="text-sm text-blue-700 dark:text-blue-300">
-                        Connect a device and select a plan to get started with
-                        our services.
+                        You're signed in and ready to explore our services.
                       </p>
                     </div>
                   </div>
                   <Button
-                    onClick={() => setUserState("registered-with-device")}
+                    onClick={() => navigate("/my-account")}
                     className="bg-blue-600 hover:bg-blue-700 text-white"
                   >
-                    Connect Device
+                    My Account
                   </Button>
                 </div>
               </div>
