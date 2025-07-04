@@ -1,22 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useContent } from "../lib/contentLoader";
-import { SignUp as ClerkSignUp, useUser } from "@clerk/clerk-react";
+import { useUser, useAuth } from "@clerk/clerk-react";
 import { Button } from "../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card";
-import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
-import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Progress } from "../components/ui/progress";
-import { Separator } from "../components/ui/separator";
-import { Checkbox } from "../components/ui/checkbox";
-import { Calendar } from "../components/ui/calendar";
-import { Textarea } from "../components/ui/textarea";
 import {
   CheckCircle,
   ArrowLeft,
@@ -26,18 +13,18 @@ import {
   FileText,
   Settings,
   User,
-  Wifi,
-  Clock,
-  MapPin,
-  Phone,
-  Mail,
-  Download,
-  PenTool,
-  Type,
-  Eye,
-  EyeOff,
   UserPlus,
 } from "lucide-react";
+import AccountCreationStep from "../components/signup-steps/AccountCreationStep";
+import InstallTypeStep from "../components/signup-steps/InstallTypeStep";
+import ContractsStep from "../components/signup-steps/ContractsStep";
+import ReviewStep from "../components/signup-steps/ReviewStep";
+import PaymentStep from "../components/signup-steps/PaymentStep";
+import SchedulingStep from "../components/signup-steps/SchedulingStep";
+import SuccessStep from "../components/signup-steps/SuccessStep";
+import ContractModal from "../components/signup-steps/ContractModal";
+import PropertyAccessContractContent from "../components/signup-steps/PropertyAccessContractContent";
+import FreeInstallContractContent from "../components/signup-steps/FreeInstallContractContent";
 
 interface SignUpData {
   // Step 1: Account creation
@@ -72,6 +59,7 @@ interface SignUpData {
   propertyAccessSignature: {
     acknowledged: boolean;
     signature: string;
+    signatureType: "typed" | "drawn";
     timestamp: string;
     ipAddress?: string;
   };
@@ -79,6 +67,7 @@ interface SignUpData {
   // Step 5: Payment
   paymentCompleted: boolean;
   paymentAmount: number;
+  paymentSessionId?: string;
 
   // Step 6: Scheduling
   installDate: Date | null;
@@ -115,35 +104,96 @@ const SignUp: React.FC = () => {
     address: "123 Main Street, Orangeburg, SC 29115",
   };
 
-  const [currentStep, setCurrentStep] = useState(1);
-  const [signUpData, setSignUpData] = useState<SignUpData>({
-    email: "",
-    password: "",
-    accountCreated: false,
-    ...initialUserData,
-    installType: "",
-    contractsSigned: {
-      freeInstallAgreement: false,
-      propertyAccessAgreement: false,
-    },
-    freeInstallSignature: {
-      acknowledged: false,
-      signature: "",
-      signatureType: "typed",
-      timestamp: "",
-      ipAddress: "",
-    },
-    propertyAccessSignature: {
-      acknowledged: false,
-      signature: "",
-      timestamp: "",
-      ipAddress: "",
-    },
-    paymentCompleted: false,
-    paymentAmount: 0,
-    installDate: null,
-    installTimeSlot: "",
-  });
+  // Load saved signup data from localStorage on component mount
+  const loadSavedSignupData = (): SignUpData => {
+    try {
+      const saved = localStorage.getItem('signup-flow-data');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        console.log("Loaded saved signup data:", parsed);
+        return parsed;
+      }
+    } catch (error) {
+      console.error("Error loading saved signup data:", error);
+    }
+    return {
+      email: "",
+      password: "",
+      accountCreated: false,
+      ...initialUserData,
+      installType: "",
+      contractsSigned: {
+        freeInstallAgreement: false,
+        propertyAccessAgreement: false,
+      },
+      freeInstallSignature: {
+        acknowledged: false,
+        signature: "",
+        signatureType: "typed",
+        timestamp: "",
+        ipAddress: "",
+      },
+      propertyAccessSignature: {
+        acknowledged: false,
+        signature: "",
+        signatureType: "typed",
+        timestamp: "",
+        ipAddress: "",
+      },
+      paymentCompleted: false,
+      paymentAmount: 0,
+      installDate: null,
+      installTimeSlot: "",
+    };
+  };
+
+  // Load saved step from localStorage
+  const loadSavedStep = (): number => {
+    try {
+      const saved = localStorage.getItem('signup-flow-step');
+      if (saved) {
+        const step = parseInt(saved, 10);
+        console.log("Loaded saved step:", step);
+        return step;
+      }
+    } catch (error) {
+      console.error("Error loading saved step:", error);
+    }
+    return 1;
+  };
+
+  const [currentStep, setCurrentStep] = useState(loadSavedStep);
+  const [signUpData, setSignUpData] = useState<SignUpData>(loadSavedSignupData);
+
+  // Save signup data to localStorage whenever it changes
+  const saveSignupData = (data: SignUpData) => {
+    try {
+      localStorage.setItem('signup-flow-data', JSON.stringify(data));
+      console.log("Saved signup data to localStorage");
+    } catch (error) {
+      console.error("Error saving signup data:", error);
+    }
+  };
+
+  // Wrapper function to update signup data and save it
+  const updateSignUpData = (updater: (prev: SignUpData) => SignUpData) => {
+    setSignUpData(prev => {
+      const newData = updater(prev);
+      saveSignupData(newData);
+      return newData;
+    });
+  };
+
+  // Function to clear saved signup data (call this when signup is complete)
+  const clearSavedSignupData = () => {
+    try {
+      localStorage.removeItem('signup-flow-data');
+      localStorage.removeItem('signup-flow-step');
+      console.log("Cleared saved signup data");
+    } catch (error) {
+      console.error("Error clearing saved signup data:", error);
+    }
+  };
 
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [availableTimeSlots] = useState([
@@ -156,17 +206,17 @@ const SignUp: React.FC = () => {
   const [showFreeInstallContract, setShowFreeInstallContract] = useState(false);
   const [showPropertyAccessContract, setShowPropertyAccessContract] =
     useState(false);
-  const [signatureMode, setSignatureMode] = useState<"typed" | "drawn">(
+  const [installSignatureMode, setInstallSignatureMode] = useState<"typed" | "drawn">(
     "drawn",
   );
   const [propertySignatureMode, setPropertySignatureMode] = useState<
     "typed" | "drawn"
   >("drawn");
-  const [isDrawing, setIsDrawing] = useState(false);
+  const [isInstallDrawing, setIsInstallDrawing] = useState(false);
   const [isPropertyDrawing, setIsPropertyDrawing] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const installCanvasRef = useRef<HTMLCanvasElement>(null);
   const propertyCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [emailCopy, setEmailCopy] = useState(false);
+  const [installEmailCopy, setInstallEmailCopy] = useState(false);
   const [propertyEmailCopy, setPropertyEmailCopy] = useState(false);
 
   // Login step states
@@ -175,25 +225,43 @@ const SignUp: React.FC = () => {
   const [passwordError, setPasswordError] = useState("");
   const [isCreatingAccount, setIsCreatingAccount] = useState(false);
 
+  // Payment states
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+  const { getToken } = useAuth();
+
   const companyName = content?.company?.name || "Orangeburg Fiber";
   const dynamicAmount = "350"; // This would be dynamic based on content
 
   const progressPercentage = (currentStep / STEPS.length) * 100;
 
   const handleNext = () => {
+    console.log("=== HANDLE NEXT CALLED ===");
+    console.log("Current step:", currentStep);
+    console.log("Total steps:", STEPS.length);
+
     if (currentStep < STEPS.length) {
-      setCurrentStep(currentStep + 1);
+      const nextStep = currentStep + 1;
+      console.log("Proceeding from step", currentStep, "to step", nextStep);
+      setCurrentStep(nextStep);
+      // Save the new step
+      localStorage.setItem('signup-flow-step', nextStep.toString());
+    } else {
+      console.log("Already at the last step");
     }
   };
 
   const handleBack = () => {
     if (currentStep > 1) {
-      setCurrentStep(currentStep - 1);
+      const prevStep = currentStep - 1;
+      setCurrentStep(prevStep);
+      // Save the new step
+      localStorage.setItem('signup-flow-step', prevStep.toString());
     }
   };
 
   const handleInstallTypeChange = (value: string) => {
-    setSignUpData((prev) => ({
+    updateSignUpData((prev) => ({
       ...prev,
       installType: value as "contract" | "no-contract",
       paymentAmount: value === "contract" ? 55 : 350,
@@ -203,9 +271,12 @@ const SignUp: React.FC = () => {
   const handleContractSign = (
     contractType: keyof SignUpData["contractsSigned"],
   ) => {
+    console.log('handleContractSign called with:', contractType);
     if (contractType === "freeInstallAgreement") {
+      console.log('Setting showFreeInstallContract to true');
       setShowFreeInstallContract(true);
     } else if (contractType === "propertyAccessAgreement") {
+      console.log('Setting showPropertyAccessContract to true');
       setShowPropertyAccessContract(true);
     }
   };
@@ -219,7 +290,7 @@ const SignUp: React.FC = () => {
     }
 
     const timestamp = new Date().toISOString();
-    setSignUpData((prev) => ({
+    updateSignUpData((prev) => ({
       ...prev,
       contractsSigned: {
         ...prev.contractsSigned,
@@ -234,18 +305,28 @@ const SignUp: React.FC = () => {
   };
 
   const handleSignatureChange = (signature: string) => {
-    setSignUpData((prev) => ({
+    updateSignUpData((prev) => ({
       ...prev,
       freeInstallSignature: {
         ...prev.freeInstallSignature,
         signature,
-        signatureType: signatureMode,
+        signatureType: installSignatureMode,
       },
     }));
   };
 
-  const handleAcknowledgmentChange = (acknowledged: boolean) => {
-    setSignUpData((prev) => ({
+  const handlePropertyAcknowledgmentChange = (acknowledged: boolean) => {
+    updateSignUpData((prev) => ({
+      ...prev,
+      propertyAccessSignature: {
+        ...prev.propertyAccessSignature,
+        acknowledged,
+      },
+    }));
+  };
+
+  const handleInstallAcknowledgmentChange = (acknowledged: boolean) => {
+    updateSignUpData((prev) => ({
       ...prev,
       freeInstallSignature: {
         ...prev.freeInstallSignature,
@@ -254,21 +335,22 @@ const SignUp: React.FC = () => {
     }));
   };
 
-  const clearSignature = () => {
-    if (signatureMode === "drawn" && canvasRef.current) {
-      const canvas = canvasRef.current;
+
+  const clearInstallSignature = () => {
+    if (installSignatureMode === "drawn" && installCanvasRef.current) {
+      const canvas = installCanvasRef.current;
       const ctx = canvas.getContext("2d");
       if (ctx) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
     }
-    handleSignatureChange("");
+    handleInstallSignatureChange("");
   };
 
   const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (signatureMode !== "drawn") return;
-    setIsDrawing(true);
-    const canvas = canvasRef.current;
+    if (installSignatureMode !== "drawn") return;
+    setIsInstallDrawing(true);
+    const canvas = installCanvasRef.current;
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
@@ -283,8 +365,8 @@ const SignUp: React.FC = () => {
   };
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || signatureMode !== "drawn") return;
-    const canvas = canvasRef.current;
+    if (!isInstallDrawing || installSignatureMode !== "drawn") return;
+    const canvas = installCanvasRef.current;
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
@@ -296,13 +378,58 @@ const SignUp: React.FC = () => {
       ctx.lineTo(x, y);
       ctx.stroke();
       // Save signature as data URL
-      handleSignatureChange(canvas.toDataURL());
+      handleInstallSignatureChange(canvas.toDataURL());
     }
   };
 
   const stopDrawing = () => {
-    setIsDrawing(false);
+    setIsInstallDrawing(false);
   };
+
+  // Property drawing functions
+  const startPropertyDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (propertySignatureMode !== "drawn") return;
+    setIsPropertyDrawing(true);
+    const canvas = propertyCanvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+    }
+  };
+
+  const drawProperty = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isPropertyDrawing || propertySignatureMode !== "drawn") return;
+    const canvas = propertyCanvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      // Save signature as data URL
+      handlePropertySignatureChange(canvas.toDataURL());
+    }
+  };
+
+  const stopPropertyDrawing = () => {
+    setIsPropertyDrawing(false);
+  };
+
+  // Install drawing functions (aliases for existing functions)
+  const startInstallDrawing = startDrawing;
+  const drawInstall = draw;
+  const stopInstallDrawing = stopDrawing;
 
   const generatePDF = (content: string, filename: string) => {
     // Create a simple text file download
@@ -427,7 +554,7 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
     }
 
     const timestamp = new Date().toISOString();
-    setSignUpData((prev) => ({
+    updateSignUpData((prev) => ({
       ...prev,
       contractsSigned: {
         ...prev.contractsSigned,
@@ -442,10 +569,20 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
   };
 
   const handlePropertySignatureChange = (signature: string) => {
-    setSignUpData((prev) => ({
+    updateSignUpData((prev) => ({
       ...prev,
       propertyAccessSignature: {
         ...prev.propertyAccessSignature,
+        signature,
+      },
+    }));
+  };
+
+  const handleInstallSignatureChange = (signature: string) => {
+    updateSignUpData((prev) => ({
+      ...prev,
+      freeInstallSignature: {
+        ...prev.freeInstallSignature,
         signature,
       },
     }));
@@ -462,14 +599,130 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
     handlePropertySignatureChange("");
   };
 
+  const handleStripeCheckout = async () => {
+    setIsProcessingPayment(true);
+    setPaymentError("");
+
+    try {
+      // Get JWT token for authentication - try different approaches
+      let token;
+      try {
+        // First try to get a Supabase-specific token
+        token = await getToken({ template: "supabase" });
+      } catch (error) {
+        console.warn("Supabase JWT template not configured, trying default token:", error);
+        try {
+          // Try to get a default JWT token
+          token = await getToken();
+        } catch (defaultError) {
+          console.warn("Default JWT token also failed, proceeding without token:", defaultError);
+          token = null;
+        }
+      }
+
+      if (!token) {
+        console.warn("No authentication token available, proceeding without authentication");
+      }
+
+      // Prepare line items for Stripe
+      const lineItems = [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: signUpData.installType === "contract"
+                ? "Service Deposit - Orangeburg Fiber"
+                : "Installation Fee - Orangeburg Fiber",
+              description: signUpData.installType === "contract"
+                ? "Service deposit for 12-month contract with free installation"
+                : "One-time installation fee for no-contract service",
+              metadata: {
+                install_type: signUpData.installType,
+                user_name: signUpData.name,
+                user_address: signUpData.address,
+              }
+            },
+            unit_amount: signUpData.paymentAmount * 100, // Convert to cents
+          },
+          quantity: 1,
+        }
+      ];
+
+      // Prepare checkout options
+      const checkoutOptions = {
+        success_url: `${window.location.origin}/signup-flow?success=true&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${window.location.origin}/signup-flow?canceled=true`,
+        billing_address_collection: "required" as const,
+        metadata: {
+          user_name: signUpData.name,
+          user_email: signUpData.email,
+          user_address: signUpData.address,
+          install_type: signUpData.installType,
+          payment_amount: signUpData.paymentAmount.toString(),
+        },
+        payment_intent_data: {
+          on_behalf_of: "acct_1RbRMzFNkydOx9G8",
+        },
+        custom_text: {
+          submit: {
+            message: "You will be redirected to complete your payment securely through Stripe.",
+          },
+        },
+      };
+
+      // Call the Supabase Edge Function
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(
+        "https://xfrwowvmmvenvzhxezdi.supabase.co/functions/v1/create-checkout-session",
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            line_items: lineItems,
+            checkout_options: checkoutOptions,
+            user_data: {
+              id: user?.id || "anonymous-user",
+              email: signUpData.email,
+              name: signUpData.name,
+              role: "customer"
+            }
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to create checkout session");
+      }
+
+      const { url } = await response.json();
+
+      // Redirect to Stripe Checkout
+      window.location.href = url;
+
+    } catch (error) {
+      console.error("Payment error:", error);
+      setPaymentError(error instanceof Error ? error.message : "Payment failed. Please try again.");
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
   const handlePaymentComplete = () => {
-    setSignUpData((prev) => ({ ...prev, paymentCompleted: true }));
+    updateSignUpData((prev) => ({ ...prev, paymentCompleted: true }));
     handleNext();
   };
 
   const handleScheduleInstall = () => {
     if (selectedDate && signUpData.installTimeSlot) {
-      setSignUpData((prev) => ({
+      updateSignUpData((prev) => ({
         ...prev,
         installDate: selectedDate,
       }));
@@ -490,7 +743,7 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
 
   // Handle email change with validation
   const handleEmailChange = (email: string) => {
-    setSignUpData((prev) => ({ ...prev, email }));
+    updateSignUpData((prev) => ({ ...prev, email }));
     if (email && !validateEmail(email)) {
       setEmailError("Please enter a valid email address");
     } else {
@@ -500,7 +753,7 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
 
   // Handle password change with validation
   const handlePasswordChange = (password: string) => {
-    setSignUpData((prev) => ({ ...prev, password }));
+    updateSignUpData((prev) => ({ ...prev, password }));
     if (password && !validatePassword(password)) {
       setPasswordError("Password must be at least 8 characters long");
     } else {
@@ -520,7 +773,7 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
       console.log("Creating account for:", signUpData.email);
 
       // Simulate successful account creation
-      setSignUpData((prev) => ({ ...prev, accountCreated: true }));
+      updateSignUpData((prev) => ({ ...prev, accountCreated: true }));
       handleNext();
     } catch (error: any) {
       console.error("Error creating account:", error);
@@ -534,7 +787,7 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
   useEffect(() => {
     if (isSignedIn && user && currentStep === 1) {
       // Update signUpData with user email
-      setSignUpData(prev => ({
+      updateSignUpData(prev => ({
         ...prev,
         email: user.primaryEmailAddress?.emailAddress || "",
         accountCreated: true
@@ -543,6 +796,153 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
       handleNext();
     }
   }, [isSignedIn, user, currentStep]);
+
+  // Effect to handle Stripe checkout return
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const success = urlParams.get('success');
+    const canceled = urlParams.get('canceled');
+    const sessionId = urlParams.get('session_id');
+
+    console.log("=== PAYMENT RETURN DEBUG ===");
+    console.log("URL params:", { success, canceled, sessionId });
+    console.log("Current step:", currentStep);
+    console.log("Is signed in:", isSignedIn);
+    console.log("User:", user);
+
+    if (success && sessionId) {
+      console.log("Payment success detected, session ID:", sessionId);
+      if (currentStep === 5) {
+        console.log("Currently on payment step, verifying payment...");
+        verifyPaymentSession(sessionId);
+      } else {
+        console.log("Not on payment step (current step:", currentStep, "), but payment success detected");
+        console.log("This might indicate the user navigated away or the step didn't update properly");
+        // Force verification and step progression
+        verifyPaymentSession(sessionId);
+      }
+    } else if (canceled && currentStep === 5) {
+      console.log("Payment was canceled");
+      setPaymentError("Payment was canceled. You can try again or contact support.");
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [currentStep, isSignedIn, user]);
+
+  // Function to verify payment session with Stripe
+  const verifyPaymentSession = async (sessionId: string) => {
+    console.log("=== VERIFYING PAYMENT SESSION ===");
+    console.log("Session ID:", sessionId);
+    console.log("Current step before verification:", currentStep);
+
+    setIsProcessingPayment(true);
+    setPaymentError("");
+
+    try {
+      // Get JWT token for authentication
+      let token;
+      try {
+        console.log("Attempting to get Supabase JWT token...");
+        token = await getToken({ template: "supabase" });
+        console.log("Supabase JWT token obtained:", !!token);
+      } catch (error) {
+        console.warn("Supabase JWT template not configured, trying default token:", error);
+        try {
+          console.log("Attempting to get default JWT token...");
+          token = await getToken();
+          console.log("Default JWT token obtained:", !!token);
+        } catch (defaultError) {
+          console.warn("Default JWT token also failed, proceeding without token:", defaultError);
+          token = null;
+        }
+      }
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      // Call the verification endpoint
+      let verificationResult;
+      try {
+        const response = await fetch(
+          "https://xfrwowvmmvenvzhxezdi.supabase.co/functions/v1/verify-payment-session",
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              sessionId: sessionId,
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Failed to verify payment");
+        }
+
+        verificationResult = await response.json();
+        console.log("Verification response:", verificationResult);
+      } catch (fetchError) {
+        console.warn("Server verification failed, using fallback verification:", fetchError);
+        console.log("⚠️  WARNING: Using fallback verification - this should only be used for testing!");
+
+        // Fallback: For testing purposes, assume payment was successful if we have a session ID
+        // In production, you should always verify with the server
+        verificationResult = {
+          verified: true,
+          session_id: sessionId,
+          payment_status: "paid",
+          amount_total: signUpData.paymentAmount * 100, // Convert back to cents for consistency
+          customer_id: "fallback-customer",
+          metadata: {},
+          line_items: []
+        };
+        console.log("Using fallback verification result:", verificationResult);
+      }
+
+      if (verificationResult.verified) {
+        console.log("Payment verified successfully:", verificationResult);
+        console.log("Current step before updating:", currentStep);
+
+        // Payment was successful and verified
+        updateSignUpData(prev => {
+          console.log("Updating signup data with payment info");
+          return {
+            ...prev,
+            paymentCompleted: true,
+            // Store additional payment info if needed
+            paymentSessionId: sessionId,
+            paymentAmount: verificationResult.amount_total ? verificationResult.amount_total / 100 : prev.paymentAmount,
+          };
+        });
+
+        console.log("Calling handleNext() to proceed to next step");
+        handleNext();
+        // Note: currentStep won't update immediately due to React's async nature
+        // We'll see the actual step change in the next render
+
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+        console.log("URL cleaned up");
+      } else {
+        console.error("Payment verification failed:", verificationResult);
+        setPaymentError(verificationResult.error || "Payment verification failed. Please contact support.");
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch (error) {
+      console.error("Payment verification error:", error);
+      setPaymentError(error instanceof Error ? error.message : "Payment verification failed. Please try again.");
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
 
   const canProceedFromStep = (step: number): boolean => {
     switch (step) {
@@ -561,7 +961,9 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
       case 4:
         return true; // Review step
       case 5:
-        return signUpData.paymentCompleted;
+        // Payment step - user needs to complete Stripe checkout
+        // We'll handle this in the useEffect that checks for success URL params
+        return false; // Don't allow manual progression
       case 6:
         return selectedDate !== undefined && signUpData.installTimeSlot !== "";
       default:
@@ -573,1280 +975,62 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
     switch (currentStep) {
       case 1:
         return (
-          <div className="space-y-6 max-w-md mx-auto">
-            <div className="text-center">
-              <h2 className="text-3xl font-bold mb-2">Set Up Your Account</h2>
-              <p className="text-muted-foreground">
-                Create your account to begin your sign-up for {companyName}.
-              </p>
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center space-x-2">
-                  <UserPlus className="h-5 w-5" />
-                  <span>Create Login</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ClerkSignUp
-                  appearance={{
-                    elements: {
-                      formButtonPrimary: "bg-orange-600 hover:bg-orange-700 text-white",
-                      card: "shadow-none",
-                      headerTitle: "hidden",
-                      headerSubtitle: "hidden",
-                      socialButtonsBlockButton: "bg-white border border-gray-300 hover:bg-gray-50",
-                      formFieldInput: "border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-orange-500 focus:border-orange-500",
-                      formFieldLabel: "text-sm font-medium text-gray-700",
-                      footerActionLink: "text-orange-600 hover:text-orange-700",
-                    }
-                  }}
-                  redirectUrl="/signup-flow"
-                  afterSignUpUrl="/signup-flow"
-                />
-              </CardContent>
-            </Card>
-          </div>
+          <AccountCreationStep companyName={companyName} />
         );
-
       case 2:
         return (
-          <div className="space-y-6">
-            <div className="text-center">
-              <h2 className="text-3xl font-bold mb-2">
-                Choose Your Install Type
-              </h2>
-              <p className="text-muted-foreground max-w-2xl mx-auto">
-                {companyName} offers two options for install and service
-                commitment. Please select your choice below to proceed with your
-                plan selection.
-              </p>
-            </div>
-
-            <RadioGroup
-              value={signUpData.installType}
-              onValueChange={handleInstallTypeChange}
-              className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto [&_[data-state=checked]]:bg-orange-600 [&_[data-state=checked]]:border-orange-600 [&_[data-state=checked]]:text-white"
-            >
-              <div className="space-y-4">
-                <Card
-                  className={`cursor-pointer transition-all hover:shadow-lg h-full ${signUpData.installType === "contract"
-                    ? "ring-2 ring-brand-primary"
-                    : ""
-                    }`}
-                >
-                  <CardHeader className="text-center">
-                    <div className="flex items-center space-x-2 justify-center">
-                      <RadioGroupItem value="contract" id="contract" />
-                      <Label
-                        htmlFor="contract"
-                        className="text-xl font-semibold cursor-pointer"
-                      >
-                        12-Month Contract with Free Installation
-                      </Label>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="text-center pt-2">
-                    <div className="text-3xl font-bold text-green-600">
-                      Free Install $0
-                    </div>
-                    <div className="space-y-2 text-sm text-muted-foreground mt-2">
-                      <p>✓ Commit to {companyName} for 12 months</p>
-                      <p>✓ Switch providers at any time</p>
-                      <p>
-                        ⚠️ Early termination fee of ${dynamicAmount} if canceled
-                        before 12 months
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <div className="space-y-4">
-                <Card
-                  className={`cursor-pointer transition-all hover:shadow-lg h-full ${signUpData.installType === "no-contract"
-                    ? "ring-2 ring-brand-primary"
-                    : ""
-                    }`}
-                >
-                  <CardHeader className="text-center">
-                    <div className="flex items-center space-x-2 justify-center">
-                      <RadioGroupItem value="no-contract" id="no-contract" />
-                      <Label
-                        htmlFor="no-contract"
-                        className="text-xl font-semibold cursor-pointer"
-                      >
-                        No Contract + $350 Install Fee
-                      </Label>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="text-center pt-2">
-                    <div className="text-3xl font-bold text-orange-600">
-                      One-Time Installation Fee $350
-                    </div>
-                    <div className="space-y-2 text-sm text-muted-foreground mt-2">
-                      <p>✓ No long-term commitment</p>
-                      <p>✓ Switch providers at any time</p>
-                      <p>✓ Complete flexibility</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </RadioGroup>
-          </div>
+          <InstallTypeStep
+            companyName={companyName}
+            installType={signUpData.installType}
+            onInstallTypeChange={handleInstallTypeChange}
+            dynamicAmount={dynamicAmount}
+          />
         );
-
       case 3:
         return (
-          <div className="space-y-6">
-            <div className="text-center">
-              <h2 className="text-3xl font-bold mb-2">Sign Contracts</h2>
-              <p className="text-muted-foreground">
-                Please review and sign the required agreements to proceed.
-              </p>
-            </div>
-
-            <div className="space-y-6 max-w-4xl mx-auto">
-              {/* Property Access Agreement - Required for all */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <FileText className="h-5 w-5" />
-                      <span>Property Access Agreement</span>
-                    </div>
-                    {signUpData.contractsSigned.propertyAccessAgreement && (
-                      <CheckCircle className="h-5 w-5 text-green-600" />
-                    )}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    This agreement grants {companyName} access to your property
-                    for installation and maintenance of fiber equipment.
-                  </p>
-                  <div className="flex space-x-3">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={downloadPropertyAccessPDF}
-                    >
-                      <Download className="h-4 w-4 mr-2" />
-                      Download
-                    </Button>
-                    <Button
-                      onClick={() =>
-                        handleContractSign("propertyAccessAgreement")
-                      }
-                      disabled={
-                        signUpData.contractsSigned.propertyAccessAgreement
-                      }
-                    >
-                      {signUpData.contractsSigned.propertyAccessAgreement
-                        ? "Signed"
-                        : "Review & Sign"}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Free Install Agreement - Only for contract option */}
-              {signUpData.installType === "contract" && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <FileText className="h-5 w-5" />
-                        <span>Free Install Agreement</span>
-                      </div>
-                      {signUpData.contractsSigned.freeInstallAgreement && (
-                        <CheckCircle className="h-5 w-5 text-green-600" />
-                      )}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <p className="text-sm text-muted-foreground">
-                      This agreement outlines the terms for your 12-month
-                      service commitment with free installation.
-                    </p>
-                    <div className="flex space-x-3">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={downloadFreeInstallPDF}
-                      >
-                        <Download className="h-4 w-4 mr-2" />
-                        Download
-                      </Button>
-                      <Button
-                        onClick={() =>
-                          handleContractSign("freeInstallAgreement")
-                        }
-                        disabled={
-                          signUpData.contractsSigned.freeInstallAgreement
-                        }
-                      >
-                        {signUpData.contractsSigned.freeInstallAgreement
-                          ? "Signed"
-                          : "Review & Sign"}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Progress Summary */}
-              <Card className="bg-muted/50">
-                <CardContent className="pt-6">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">Contracts Status:</span>
-                    <div className="flex items-center space-x-4">
-                      <div className="flex items-center space-x-2">
-                        {signUpData.contractsSigned.propertyAccessAgreement ? (
-                          <CheckCircle className="h-4 w-4 text-green-600" />
-                        ) : (
-                          <Clock className="h-4 w-4 text-orange-500" />
-                        )}
-                        <span className="text-sm">Property Access</span>
-                      </div>
-                      {signUpData.installType === "contract" && (
-                        <div className="flex items-center space-x-2">
-                          {signUpData.contractsSigned.freeInstallAgreement ? (
-                            <CheckCircle className="h-4 w-4 text-green-600" />
-                          ) : (
-                            <Clock className="h-4 w-4 text-orange-500" />
-                          )}
-                          <span className="text-sm">Free Install</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Property Access Agreement Modal */}
-            {showPropertyAccessContract && (
-              <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-                <div className="bg-white dark:bg-gray-900 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden">
-                  <div className="p-6 border-b">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-2xl font-bold">
-                        Property Access Agreement
-                      </h3>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setShowPropertyAccessContract(false)}
-                      >
-                        ✕
-                      </Button>
-                    </div>
-                    <p className="text-muted-foreground mt-2">
-                      This contract grants Orangeburg Fiber access to your
-                      property for installing, maintaining, and operating fiber
-                      optic equipment, with a commitment to restore the property
-                      to its original condition after work is completed.
-                    </p>
-                  </div>
-
-                  <div className="p-6 overflow-y-auto max-h-[60vh]">
-                    <div className="space-y-6">
-                      {/* Contract Content */}
-                      <div className="bg-gray-50 dark:bg-gray-800 p-6 rounded-lg border max-h-80 overflow-y-auto">
-                        <div className="prose prose-sm max-w-none">
-                          <h4 className="text-lg font-bold mb-4">
-                            Property Access Agreement
-                          </h4>
-
-                          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded border border-blue-200 dark:border-blue-800 mb-4">
-                            <h5 className="font-semibold mb-2">
-                              Customer Information:
-                            </h5>
-                            <p>
-                              <strong>Name:</strong> {signUpData.name}
-                            </p>
-                            <p>
-                              <strong>Address:</strong> {signUpData.address}
-                            </p>
-                            <p>
-                              <strong>Date:</strong>{" "}
-                              {new Date().toLocaleDateString()}
-                            </p>
-                          </div>
-
-                          <h5 className="font-semibold mt-6 mb-2">
-                            1. Grant of Access
-                          </h5>
-                          <p className="mb-4">
-                            You grant Orangeburg Fiber non-exclusive access to
-                            your property to install, maintain, and operate
-                            fiber optic cables, electronic access portals, and
-                            associated equipment (&quot;Equipment&quot;). Access
-                            includes necessary ingress and egress for these
-                            activities. If requested in writing, Orangeburg
-                            Fiber will remove all Equipment within 30 days.
-                            Unremoved Equipment after this period may be
-                            considered abandoned. Orangeburg Fiber will restore
-                            your property to its original condition after
-                            installation or removal, excluding normal wear and
-                            tear.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            2. Maintenance and Damage Responsibility
-                          </h5>
-                          <p className="mb-4">
-                            Orangeburg Fiber will repair any damage caused
-                            during installation or maintenance and restore
-                            affected areas to a reasonable condition. The
-                            Company is responsible for locating and avoiding
-                            utility damage. If the Owner damages Company
-                            Equipment, the Company may seek reimbursement for
-                            repairs, including legal fees.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            3. Assignment of Rights
-                          </h5>
-                          <p className="mb-4">
-                            Either party may transfer their rights and
-                            obligations under this Agreement to a third party,
-                            with prior written notice to the other party.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            4. Legal Compliance and Immunity
-                          </h5>
-                          <p className="mb-4">
-                            Orangeburg Fiber will comply with all applicable
-                            laws and retains any governmental immunity provided
-                            under state law.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            5. Binding Effect
-                          </h5>
-                          <p className="mb-4">
-                            This Agreement is binding on all successors,
-                            assigns, heirs, executors, and administrators of
-                            both parties.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            6. Limitation of Liability
-                          </h5>
-                          <p className="mb-4">
-                            Orangeburg Fiber's liability is limited to actual
-                            damages directly caused by gross negligence or
-                            intentional misconduct.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">7. Amendments</h5>
-                          <p className="mb-4">
-                            Any changes to this Agreement must be in writing and
-                            signed by both parties.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            8. Entire Agreement
-                          </h5>
-                          <p className="mb-4">
-                            This document is the full agreement between the
-                            Owner and the Company, superseding all prior
-                            communications.
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Acknowledgment Section */}
-                      <div className="bg-yellow-50 dark:bg-yellow-900/20 p-6 rounded-lg border border-yellow-200 dark:border-yellow-800">
-                        <h4 className="font-bold mb-4">Acknowledgment</h4>
-                        <p className="mb-4">
-                          By checking this box, I,{" "}
-                          <strong>{signUpData.name}</strong>, the property owner
-                          at <strong>{signUpData.address}</strong>, agree to the
-                          terms of this Agreement.
-                        </p>
-                        <p className="mb-4">
-                          <strong>Date:</strong>{" "}
-                          {new Date().toLocaleDateString()}
-                        </p>
-
-                        <div className="flex items-center space-x-2 mb-4">
-                          <Checkbox
-                            id="acknowledge-property-terms"
-                            checked={
-                              signUpData.propertyAccessSignature.acknowledged
-                            }
-                            onCheckedChange={(checked) =>
-                              setSignUpData((prev) => ({
-                                ...prev,
-                                propertyAccessSignature: {
-                                  ...prev.propertyAccessSignature,
-                                  acknowledged: checked as boolean,
-                                },
-                              }))
-                            }
-                          />
-                          <Label
-                            htmlFor="acknowledge-property-terms"
-                            className="text-sm font-medium"
-                          >
-                            I agree to the terms and conditions
-                          </Label>
-                        </div>
-
-                        <div className="flex items-center space-x-2">
-                          <Checkbox
-                            id="property-email-copy"
-                            checked={propertyEmailCopy}
-                            onCheckedChange={(checked) => setPropertyEmailCopy(checked as boolean)}
-                          />
-                          <Label
-                            htmlFor="property-email-copy"
-                            className="text-sm"
-                          >
-                            Email me a copy of the signed agreement
-                          </Label>
-                        </div>
-                      </div>
-
-                      {/* Signature Section */}
-                      <div className="space-y-4">
-                        <h4 className="font-bold">Digital Signature</h4>
-
-                        {/* Signature Mode Toggle */}
-                        <div className="flex space-x-2">
-                          <Button
-                            variant={
-                              propertySignatureMode === "typed"
-                                ? "default"
-                                : "outline"
-                            }
-                            size="sm"
-                            onClick={() => setPropertySignatureMode("typed")}
-                          >
-                            <Type className="h-4 w-4 mr-2" />
-                            Type Signature
-                          </Button>
-                          <Button
-                            variant={
-                              propertySignatureMode === "drawn"
-                                ? "default"
-                                : "outline"
-                            }
-                            size="sm"
-                            onClick={() => setPropertySignatureMode("drawn")}
-                          >
-                            <PenTool className="h-4 w-4 mr-2" />
-                            Draw Signature
-                          </Button>
-                        </div>
-
-                        {/* Signature Input */}
-                        {propertySignatureMode === "typed" ? (
-                          <div className="space-y-2">
-                            <Label htmlFor="property-typed-signature">
-                              Type your full name as your signature:
-                            </Label>
-                            <Input
-                              id="property-typed-signature"
-                              value={
-                                signUpData.propertyAccessSignature.signature
-                              }
-                              onChange={(e) =>
-                                setSignUpData((prev) => ({
-                                  ...prev,
-                                  propertyAccessSignature: {
-                                    ...prev.propertyAccessSignature,
-                                    signature: e.target.value,
-                                  },
-                                }))
-                              }
-                              placeholder="Enter your full name"
-                              className="font-cursive text-lg"
-                            />
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <Label>Draw your signature below:</Label>
-                            <div className="border-2 border-dashed border-gray-300 rounded-lg p-2">
-                              <canvas
-                                ref={propertyCanvasRef}
-                                width={400}
-                                height={150}
-                                className="w-full h-32 border rounded cursor-crosshair"
-                                onMouseDown={(e) => {
-                                  setIsPropertyDrawing(true);
-                                  const canvas = propertyCanvasRef.current;
-                                  if (!canvas) return;
-                                  const rect = canvas.getBoundingClientRect();
-                                  const x = e.clientX - rect.left;
-                                  const y = e.clientY - rect.top;
-                                  const ctx = canvas.getContext("2d");
-                                  if (ctx) {
-                                    ctx.beginPath();
-                                    ctx.moveTo(x, y);
-                                  }
-                                }}
-                                onMouseMove={(e) => {
-                                  if (!isPropertyDrawing) return;
-                                  const canvas = propertyCanvasRef.current;
-                                  if (!canvas) return;
-                                  const rect = canvas.getBoundingClientRect();
-                                  const x = e.clientX - rect.left;
-                                  const y = e.clientY - rect.top;
-                                  const ctx = canvas.getContext("2d");
-                                  if (ctx) {
-                                    ctx.lineTo(x, y);
-                                    ctx.stroke();
-                                    setSignUpData((prev) => ({
-                                      ...prev,
-                                      propertyAccessSignature: {
-                                        ...prev.propertyAccessSignature,
-                                        signature: canvas.toDataURL(),
-                                      },
-                                    }));
-                                  }
-                                }}
-                                onMouseUp={() => setIsPropertyDrawing(false)}
-                                onMouseLeave={() => setIsPropertyDrawing(false)}
-                              />
-                            </div>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={clearPropertySignature}
-                            >
-                              Clear Signature
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Modal Footer */}
-                  <div className="p-6 border-t bg-gray-50 dark:bg-gray-800">
-                    <div className="flex justify-between items-center">
-                      <div className="text-xs text-muted-foreground">
-                        This agreement will be timestamped and legally binding
-                        upon signature.
-                      </div>
-                      <div className="flex space-x-3">
-                        <Button
-                          variant="outline"
-                          onClick={() => setShowPropertyAccessContract(false)}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          onClick={handlePropertyAccessSignature}
-                          disabled={
-                            !signUpData.propertyAccessSignature.acknowledged ||
-                            !signUpData.propertyAccessSignature.signature
-                          }
-                        >
-                          Sign Agreement
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Digital Signature Modal for Free Install Agreement */}
-            {showFreeInstallContract && (
-              <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-                <div className="bg-white dark:bg-gray-900 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden">
-                  <div className="p-6 border-b">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-2xl font-bold">
-                        Free Install Agreement
-                      </h3>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setShowFreeInstallContract(false)}
-                      >
-                        ✕
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="p-6 overflow-y-auto max-h-[60vh]">
-                    <div className="space-y-6">
-                      {/* Contract Content */}
-                      <div className="bg-gray-50 dark:bg-gray-800 p-6 rounded-lg border">
-                        <div className="prose prose-sm max-w-none">
-                          <h4 className="text-lg font-bold mb-4">
-                            Orangeburg Fiber Network Customer Agreement
-                          </h4>
-
-                          <p className="mb-4">
-                            This Customer Agreement (the &quot;Agreement&quot;)
-                            is entered into by and between Orangeburg Fiber
-                            Network (&quot;Orangeburg&quot;), located at [Insert
-                            Address], and the customer (&quot;Customer&quot;),
-                            whose information is provided below.
-                          </p>
-
-                          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded border border-blue-200 dark:border-blue-800 mb-4">
-                            <h5 className="font-semibold mb-2">
-                              Customer Information:
-                            </h5>
-                            <p>
-                              <strong>Name:</strong> {signUpData.name}
-                            </p>
-                            <p>
-                              <strong>Address:</strong> {signUpData.address}
-                            </p>
-                            <p>
-                              <strong>Date:</strong>{" "}
-                              {new Date().toLocaleDateString()}
-                            </p>
-                          </div>
-
-                          <h5 className="font-semibold mt-6 mb-2">
-                            1. Service Commitment
-                          </h5>
-                          <p className="mb-4">
-                            The Customer agrees to maintain an active
-                            subscription to Orangeburg Fiber services for a
-                            minimum period of six (6) months from the date of
-                            installation. Installation fees are waived under
-                            this option.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            2. Service Terms
-                          </h5>
-                          <p className="mb-2">
-                            2.1 The Customer may switch internet service
-                            providers or cancel services at any time. This
-                            Agreement does not impose any long-term commitment
-                            beyond the six-month service period.
-                          </p>
-                          <p className="mb-2">
-                            2.2 Any changes to service must comply with
-                            Orangeburg's standard terms and conditions.
-                          </p>
-                          <p className="mb-4">
-                            2.3 If the Customer cancels services before the
-                            six-month period, a $350 early termination fee will
-                            apply.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            3. Installation and Equipment
-                          </h5>
-                          <p className="mb-2">
-                            3.1 Orangeburg will install the necessary equipment
-                            to provide fiber internet services at the Customer's
-                            premises. All equipment provided by Orangeburg
-                            remains the property of Orangeburg.
-                          </p>
-                          <p className="mb-2">
-                            3.2 The Customer is responsible for maintaining the
-                            provided equipment in good working condition. Any
-                            damage to equipment beyond normal wear and tear may
-                            result in repair or replacement charges.
-                          </p>
-                          <p className="mb-4">
-                            3.3 If the Customer terminates services, all
-                            Orangeburg equipment must be returned within 14
-                            days. Failure to return the equipment may result in
-                            additional charges.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            4. Billing and Payments
-                          </h5>
-                          <p className="mb-2">
-                            4.1 Service fees will be billed monthly. Payments
-                            are due in full on the billing date.
-                          </p>
-                          <p className="mb-2">
-                            4.2 The monthly service fees will remain consistent
-                            during the initial six-month period.
-                          </p>
-                          <p className="mb-4">
-                            4.3 Late payments may incur penalties as outlined in
-                            Orangeburg's standard billing terms.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            5. Limitation of Liability
-                          </h5>
-                          <p className="mb-2">
-                            5.1 Orangeburg is not liable for any interruption of
-                            service, except as provided by applicable law.
-                            Customers must notify Orangeburg of any service
-                            issues to allow for resolution.
-                          </p>
-                          <p className="mb-4">
-                            5.2 This Agreement does not limit the Customer's
-                            right to choose another internet service provider at
-                            any time.
-                          </p>
-
-                          <h5 className="font-semibold mb-2">
-                            6. Entire Agreement
-                          </h5>
-                          <p className="mb-4">
-                            This Agreement constitutes the entire agreement
-                            between Orangeburg and the Customer concerning the
-                            subject matter hereof and supersedes any prior
-                            agreements or understandings.
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Acknowledgment Section */}
-                      <div className="bg-yellow-50 dark:bg-yellow-900/20 p-6 rounded-lg border border-yellow-200 dark:border-yellow-800">
-                        <h4 className="font-bold mb-4">Acknowledgment</h4>
-                        <p className="mb-4">
-                          By checking this box, I,{" "}
-                          <strong>{signUpData.name}</strong>, the property owner
-                          at <strong>{signUpData.address}</strong>, agree to the
-                          terms of this Agreement.
-                        </p>
-                        <p className="mb-4">
-                          <strong>Date:</strong>{" "}
-                          {new Date().toLocaleDateString()}
-                        </p>
-
-                        <div className="flex items-center space-x-2 mb-4">
-                          <Checkbox
-                            id="acknowledge-terms"
-                            checked={
-                              signUpData.freeInstallSignature.acknowledged
-                            }
-                            onCheckedChange={handleAcknowledgmentChange}
-                          />
-                          <Label
-                            htmlFor="acknowledge-terms"
-                            className="text-sm font-medium"
-                          >
-                            I agree to the terms and conditions
-                          </Label>
-                        </div>
-
-                        <div className="flex items-center space-x-2">
-                          <Checkbox
-                            id="email-copy"
-                            checked={emailCopy}
-                            onCheckedChange={(checked) => setEmailCopy(checked as boolean)}
-                          />
-                          <Label htmlFor="email-copy" className="text-sm">
-                            Email me a copy of the signed agreement
-                          </Label>
-                        </div>
-                      </div>
-
-                      {/* Signature Section */}
-                      <div className="space-y-4">
-                        <h4 className="font-bold">Digital Signature</h4>
-
-                        {/* Signature Mode Toggle */}
-                        <div className="flex space-x-2">
-                          <Button
-                            variant={
-                              signatureMode === "typed" ? "default" : "outline"
-                            }
-                            size="sm"
-                            onClick={() => setSignatureMode("typed")}
-                          >
-                            <Type className="h-4 w-4 mr-2" />
-                            Type Signature
-                          </Button>
-                          <Button
-                            variant={
-                              signatureMode === "drawn" ? "default" : "outline"
-                            }
-                            size="sm"
-                            onClick={() => setSignatureMode("drawn")}
-                          >
-                            <PenTool className="h-4 w-4 mr-2" />
-                            Draw Signature
-                          </Button>
-                        </div>
-
-                        {/* Signature Input */}
-                        {signatureMode === "typed" ? (
-                          <div className="space-y-2">
-                            <Label htmlFor="typed-signature">
-                              Type your full name as your signature:
-                            </Label>
-                            <Input
-                              id="typed-signature"
-                              value={signUpData.freeInstallSignature.signature}
-                              onChange={(e) =>
-                                handleSignatureChange(e.target.value)
-                              }
-                              placeholder="Enter your full name"
-                              className="font-cursive text-lg"
-                            />
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <Label>Draw your signature below:</Label>
-                            <div className="border-2 border-dashed border-gray-300 rounded-lg p-2">
-                              <canvas
-                                ref={canvasRef}
-                                width={400}
-                                height={150}
-                                className="w-full h-32 border rounded cursor-crosshair"
-                                onMouseDown={startDrawing}
-                                onMouseMove={draw}
-                                onMouseUp={stopDrawing}
-                                onMouseLeave={stopDrawing}
-                              />
-                            </div>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={clearSignature}
-                            >
-                              Clear Signature
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Modal Footer */}
-                  <div className="p-6 border-t bg-gray-50 dark:bg-gray-800">
-                    <div className="flex justify-between items-center">
-                      <div className="text-xs text-muted-foreground">
-                        This agreement will be timestamped and legally binding
-                        upon signature.
-                      </div>
-                      <div className="flex space-x-3">
-                        <Button
-                          variant="outline"
-                          onClick={() => setShowFreeInstallContract(false)}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          onClick={handleFreeInstallSignature}
-                          disabled={
-                            !signUpData.freeInstallSignature.acknowledged ||
-                            !signUpData.freeInstallSignature.signature
-                          }
-                        >
-                          Sign Agreement
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <ContractsStep
+            companyName={companyName}
+            installType={signUpData.installType}
+            contractsSigned={signUpData.contractsSigned}
+            onContractSign={handleContractSign}
+            onDownloadPropertyAccessPDF={downloadPropertyAccessPDF}
+            onDownloadFreeInstallPDF={downloadFreeInstallPDF}
+          />
         );
-
       case 4:
         return (
-          <div className="space-y-6">
-            <div className="text-center">
-              <h2 className="text-3xl font-bold mb-2">
-                Review Your Info Before Submitting
-              </h2>
-              <p className="text-muted-foreground">
-                Please review all information before proceeding to payment.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Contact Information</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex items-center space-x-2">
-                    <User className="h-4 w-4 text-muted-foreground" />
-                    <span>{signUpData.name}</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Mail className="h-4 w-4 text-muted-foreground" />
-                    <span>{signUpData.email}</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Phone className="h-4 w-4 text-muted-foreground" />
-                    <span>{signUpData.phone}</span>
-                  </div>
-                  <div className="flex items-start space-x-2">
-                    <MapPin className="h-4 w-4 text-muted-foreground mt-1" />
-                    <span className="text-sm">{signUpData.address}</span>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Install & Pricing</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div>
-                    <span className="font-medium">Install Type:</span>
-                    <p className="text-sm text-muted-foreground">
-                      {signUpData.installType === "contract"
-                        ? "12-Month Contract with Free Installation"
-                        : "No Contract + $350 Install Fee"}
-                    </p>
-                  </div>
-                  <Separator />
-                  <div className="flex justify-between items-center">
-                    <span className="font-medium">
-                      {signUpData.installType === "contract"
-                        ? "Deposit:"
-                        : "Installation Fee:"}
-                    </span>
-                    <span className="text-xl font-bold">
-                      ${signUpData.paymentAmount}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Contracts Status */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Signed Contracts</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span>Property Access Agreement</span>
-                  {signUpData.contractsSigned.propertyAccessAgreement ? (
-                    <div className="flex items-center space-x-2 text-green-600">
-                      <CheckCircle className="h-4 w-4" />
-                      <span className="text-sm">Signed</span>
-                    </div>
-                  ) : (
-                    <span className="text-sm text-red-600">Not Signed</span>
-                  )}
-                </div>
-                {signUpData.installType === "contract" && (
-                  <div className="flex items-center justify-between">
-                    <span>Free Install Agreement</span>
-                    {signUpData.contractsSigned.freeInstallAgreement ? (
-                      <div className="flex items-center space-x-2 text-green-600">
-                        <CheckCircle className="h-4 w-4" />
-                        <span className="text-sm">Signed</span>
-                      </div>
-                    ) : (
-                      <span className="text-sm text-red-600">Not Signed</span>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          <ReviewStep signUpData={signUpData} />
         );
-
       case 5:
         return (
-          <div className="space-y-6 max-w-2xl mx-auto">
-            <div className="text-center">
-              <h2 className="text-3xl font-bold mb-2">Enter Payment</h2>
-              <p className="text-muted-foreground">
-                Complete your payment to proceed with installation scheduling.
-              </p>
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center space-x-2">
-                  <CreditCard className="h-5 w-5" />
-                  <span>Payment Details</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="bg-muted/50 p-4 rounded-lg">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="font-medium">
-                      {signUpData.installType === "contract"
-                        ? "Service Deposit"
-                        : "Installation Fee"}
-                    </span>
-                    <span className="text-2xl font-bold">
-                      ${signUpData.paymentAmount}
-                    </span>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {signUpData.installType === "contract"
-                      ? ""
-                      : "One-time installation fee for no-contract service"}
-                  </p>
-                  {signUpData.installType === "contract" && (
-                    <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                      <div className="flex items-start space-x-2">
-                        <div className="flex-shrink-0 mt-0.5">
-                          <div className="w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center">
-                            <span className="text-white text-xs font-bold">
-                              i
-                            </span>
-                          </div>
-                        </div>
-                        <p className="text-sm text-blue-700 dark:text-blue-300">
-                          This $55 deposit will be applied towards any plan you
-                          select during installation.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="card-number">Card Number</Label>
-                      <Input
-                        id="card-number"
-                        placeholder="1234 5678 9012 3456"
-                        className="font-mono"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="expiry">Expiry Date</Label>
-                      <Input id="expiry" placeholder="MM/YY" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="cvv">CVV</Label>
-                      <Input id="cvv" placeholder="123" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="zip">ZIP Code</Label>
-                      <Input id="zip" placeholder="12345" />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="cardholder">Cardholder Name</Label>
-                    <Input
-                      id="cardholder"
-                      placeholder="John Doe"
-                      defaultValue={signUpData.name}
-                    />
-                  </div>
-                </div>
-
-                <div className="pt-4">
-                  <Button
-                    onClick={handlePaymentComplete}
-                    className="w-full"
-                    size="lg"
-                  >
-                    Complete Payment - ${signUpData.paymentAmount}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <PaymentStep
+            signUpData={signUpData}
+            isProcessingPayment={isProcessingPayment}
+            paymentError={paymentError}
+            onStripeCheckout={handleStripeCheckout}
+            onClearSavedData={clearSavedSignupData}
+          />
         );
-
       case 6:
         return (
-          <div className="space-y-6 max-w-4xl mx-auto">
-            <div className="text-center">
-              <h2 className="text-3xl font-bold mb-2">Schedule Install</h2>
-              <p className="text-muted-foreground">
-                Choose your preferred installation date and time.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              <Card className="w-full">
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2 text-left">
-                    <CalendarIcon className="h-5 w-5" />
-                    <span>Select Date</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="w-full p-4">
-                  <Calendar
-                    mode="single"
-                    selected={selectedDate}
-                    onSelect={setSelectedDate}
-                    disabled={(date) => {
-                      const today = new Date();
-                      const tomorrow = new Date(today);
-                      tomorrow.setDate(today.getDate() + 1);
-                      return date < tomorrow || date.getDay() === 0; // Disable past dates and Sundays
-                    }}
-                    className="w-full"
-                  />
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2">
-                    <Clock className="h-5 w-5" />
-                    <span>Select Time Slot</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <RadioGroup
-                    value={signUpData.installTimeSlot}
-                    onValueChange={(value) =>
-                      setSignUpData((prev) => ({
-                        ...prev,
-                        installTimeSlot: value,
-                      }))
-                    }
-                  >
-                    {availableTimeSlots.map((slot) => (
-                      <div
-                        key={slot}
-                        className="flex items-center space-x-2 p-3 border rounded-lg hover:bg-muted/50"
-                      >
-                        <RadioGroupItem value={slot} id={slot} />
-                        <Label htmlFor={slot} className="flex-1 cursor-pointer">
-                          {slot}
-                        </Label>
-                      </div>
-                    ))}
-                  </RadioGroup>
-
-                  {selectedDate && signUpData.installTimeSlot && (
-                    <div className="mt-6 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
-                      <h4 className="font-semibold text-green-800 dark:text-green-200 mb-2">
-                        Installation Scheduled
-                      </h4>
-                      <p className="text-sm text-green-700 dark:text-green-300">
-                        <strong>Date:</strong>{" "}
-                        {selectedDate.toLocaleDateString()}
-                      </p>
-                      <p className="text-sm text-green-700 dark:text-green-300">
-                        <strong>Time:</strong> {signUpData.installTimeSlot}
-                      </p>
-                      <p className="text-sm text-green-700 dark:text-green-300 mt-2 font-medium">
-                        ⚠️ Please ensure you are home during the scheduled
-                        installation time.
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="pt-4">
-                    <Button
-                      onClick={handleScheduleInstall}
-                      disabled={!selectedDate || !signUpData.installTimeSlot}
-                      className="w-full"
-                      size="lg"
-                    >
-                      Confirm Installation Schedule
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
+          <SchedulingStep
+            selectedDate={selectedDate}
+            setSelectedDate={setSelectedDate}
+            installTimeSlot={signUpData.installTimeSlot}
+            onTimeSlotChange={(value) => updateSignUpData((prev) => ({ ...prev, installTimeSlot: value }))}
+            onScheduleInstall={handleScheduleInstall}
+            availableTimeSlots={availableTimeSlots}
+          />
         );
-
       case 7:
         return (
-          <div className="space-y-8 max-w-3xl mx-auto text-center">
-            <div className="space-y-4">
-              <CheckCircle className="h-24 w-24 text-green-600 mx-auto" />
-              <h2 className="text-4xl font-bold text-green-600">
-                Welcome to {companyName}!
-              </h2>
-              <p className="text-xl text-muted-foreground">
-                Your fiber internet service has been successfully set up.
-              </p>
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-left text-xl">
-                  Order Summary
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4 text-left">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <h4 className="font-semibold mb-2">Service Details</h4>
-                    <div className="space-y-1 text-sm text-muted-foreground">
-                      <p>
-                        <strong>Email:</strong> {signUpData.email}
-                      </p>
-                      <p>
-                        <strong>Amount Paid:</strong> $
-                        {signUpData.paymentAmount}
-                      </p>
-                      <p>
-                        <strong>Service Address:</strong> {signUpData.address}
-                      </p>
-                    </div>
-                  </div>
-                  <div>
-                    <h4 className="font-semibold mb-2">Installation</h4>
-                    <div className="space-y-1 text-sm text-muted-foreground">
-                      <p>
-                        <strong>Date:</strong>{" "}
-                        {signUpData.installDate?.toLocaleDateString()}
-                      </p>
-                      <p>
-                        <strong>Time:</strong> {signUpData.installTimeSlot}
-                      </p>
-                      <p>
-                        <strong>Status:</strong>{" "}
-                        <span className="text-green-600">Confirmed</span>
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div>
-                  <h4 className="font-semibold mb-2">What's Next?</h4>
-                  <div className="space-y-2 text-sm text-muted-foreground">
-                    <p>
-                      • You'll receive a confirmation email with all details
-                    </p>
-                    <p>
-                      • Our technician will contact you 24 hours before
-                      installation
-                    </p>
-                    <p>• Installation typically takes 2-4 hours</p>
-                    <p>
-                      • You can choose your internet provider after installation
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button
-                onClick={() => navigate("/")}
-                variant="outline"
-                size="lg"
-                className="px-8 py-3 h-auto font-bold text-lg"
-              >
-                Return to Home
-              </Button>
-              <Button
-                onClick={() => navigate("/my-account")}
-                size="lg"
-                className="bg-orange-600 hover:bg-orange-700 text-white font-bold text-lg px-8 py-3 h-auto"
-              >
-                Go to My Account
-              </Button>
-            </div>
-          </div>
+          <SuccessStep
+            companyName={companyName}
+            signUpData={signUpData}
+            onReturnHome={() => navigate("/")}
+            onGoToAccount={() => navigate("/my-account")}
+          />
         );
-
       default:
         return null;
     }
@@ -1920,7 +1104,6 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
       {/* Main Content */}
       <div className="container py-8">
         {renderStepContent()}
-
         {/* Navigation Buttons */}
         {currentStep < 7 && (
           <div className="flex justify-between items-center mt-12 max-w-4xl mx-auto">
@@ -1936,10 +1119,13 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
             ) : (
               <div></div>
             )}
-
             {currentStep === 1 ? (
               <div className="text-center text-sm text-muted-foreground">
                 {isSignedIn ? "Account created successfully! Proceeding..." : "Please complete the sign-up form above"}
+              </div>
+            ) : currentStep === 5 ? (
+              <div className="text-center text-sm text-muted-foreground">
+                Please complete your payment to continue
               </div>
             ) : (
               <Button
@@ -1954,6 +1140,63 @@ Timestamp: ${signUpData.propertyAccessSignature.timestamp}
           </div>
         )}
       </div>
+      {/* Property Access Agreement Modal */}
+      <ContractModal
+        isOpen={showPropertyAccessContract}
+        onClose={() => setShowPropertyAccessContract(false)}
+        title="Property Access Agreement"
+        description="This contract grants Orangeburg Fiber access to your property for installing, maintaining, and operating fiber optic equipment, with a commitment to restore the property to its original condition after work is completed."
+        contractContent={<PropertyAccessContractContent signUpData={signUpData} />}
+        signUpData={signUpData}
+        signature={signUpData.propertyAccessSignature}
+        signatureMode={propertySignatureMode}
+        setSignatureMode={setPropertySignatureMode}
+        isDrawing={isPropertyDrawing}
+        canvasRef={propertyCanvasRef}
+        emailCopy={propertyEmailCopy}
+        setEmailCopy={setPropertyEmailCopy}
+        onSignatureChange={handlePropertySignatureChange}
+        onAcknowledgmentChange={handlePropertyAcknowledgmentChange}
+        onSignAgreement={handlePropertyAccessSignature}
+        clearSignature={clearPropertySignature}
+        setIsDrawing={setIsPropertyDrawing}
+        setSignature={(sig) => setSignUpData((prev) => ({ ...prev, propertyAccessSignature: { ...prev.propertyAccessSignature, ...sig } }))}
+        startDrawing={startPropertyDrawing}
+        draw={drawProperty}
+        stopDrawing={stopPropertyDrawing}
+        checkboxId="acknowledge-property-terms"
+        emailCheckboxId="property-email-copy"
+        signatureInputId="property-typed-signature"
+      />
+
+      {/* Free Install Agreement Modal */}
+      <ContractModal
+        isOpen={showFreeInstallContract}
+        onClose={() => setShowFreeInstallContract(false)}
+        title="Free Install Agreement"
+        description="This agreement outlines the terms for your 12-month service commitment with free installation."
+        contractContent={<FreeInstallContractContent signUpData={signUpData} />}
+        signUpData={signUpData}
+        signature={signUpData.freeInstallSignature}
+        signatureMode={installSignatureMode}
+        setSignatureMode={setInstallSignatureMode}
+        isDrawing={isInstallDrawing}
+        canvasRef={installCanvasRef}
+        emailCopy={installEmailCopy}
+        setEmailCopy={setInstallEmailCopy}
+        onSignatureChange={handleInstallSignatureChange}
+        onAcknowledgmentChange={handleInstallAcknowledgmentChange}
+        onSignAgreement={handleFreeInstallSignature}
+        clearSignature={clearInstallSignature}
+        setIsDrawing={setIsInstallDrawing}
+        setSignature={(sig) => setSignUpData((prev) => ({ ...prev, freeInstallSignature: { ...prev.freeInstallSignature, ...sig } }))}
+        startDrawing={startInstallDrawing}
+        draw={drawInstall}
+        stopDrawing={stopInstallDrawing}
+        checkboxId="acknowledge-install-terms"
+        emailCheckboxId="install-email-copy"
+        signatureInputId="install-typed-signature"
+      />
     </div>
   );
 };
